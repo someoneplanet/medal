@@ -1,0 +1,93 @@
+name: Build and Release Luau Lifter
+
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build ${{ matrix.platform.os }}
+    runs-on: ${{ matrix.platform.os }}
+    
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            name: linux
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            name: macos
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            name: windows
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Install Rust Nightly
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        toolchain: nightly
+        targets: ${{ matrix.platform.target }}
+
+    - name: Cache Cargo dependencies
+      uses: Swatinem/rust-cache@v2
+      with:
+        key: ${{ matrix.platform.target }}
+
+    # --- Debug Build ---
+    - name: Build Debug
+      run: cargo build --bin luau-lifter
+
+    # --- Release Build ---
+    - name: Build Release
+      run: cargo build --bin luau-lifter --release
+
+    # --- Prepare Artifacts (Rename & Move) ---
+    - name: Prepare binaries (Unix)
+      if: matrix.platform.os != 'windows-latest'
+      run: |
+        mkdir artifacts
+        cp target/debug/luau-lifter artifacts/luau-lifter-${{ matrix.platform.name }}-debug
+        cp target/release/luau-lifter artifacts/luau-lifter-${{ matrix.platform.name }}-release
+
+    - name: Prepare binaries (Windows)
+      if: matrix.platform.os == 'windows-latest'
+      run: |
+        mkdir artifacts
+        copy target\debug\luau-lifter.exe artifacts\luau-lifter-${{ matrix.platform.name }}-debug.exe
+        copy target\release\luau-lifter.exe artifacts\luau-lifter-${{ matrix.platform.name }}-release.exe
+
+    - name: Upload Build Artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: builds-${{ matrix.platform.name }}
+        path: artifacts/*
+
+  release:
+    name: Create Release
+    needs: build
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Download all artifacts
+      uses: actions/download-artifact@v4
+      with:
+        path: final-artifacts
+        merge-multiple: true
+
+    - name: Create Nightly Release
+      uses: softprops/action-gh-release@v2
+      with:
+        tag_name: nightly
+        name: "Nightly Build"
+        body: "Automated build from main branch. Contains Debug and Release binaries for Linux, macOS, and Windows."
+        draft: false
+        prerelease: true
+        files: final-artifacts/*
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
